@@ -563,35 +563,47 @@ CONTROL_HTML = """
   </div>
 </div>
 
+<style>
+  /* Hide the native Leaflet layer control — we use it only as a layer registry */
+  .leaflet-control-layers { display: none !important; }
+</style>
 <script>
 var _map = null;
-var _layers = {};       // name fragment → leaflet layer
-var _tileLayers = {};   // tile name → leaflet layer
+var _layers = {};     // name fragment → leaflet layer (from LayerControl registry)
+var _tileLayers = {}; // tile name → leaflet layer
 var _currentView = 'vacancy';
 
-// Layer name patterns
 var VACANCY_LAYERS     = ['WPRDC: Vacant', 'WPRDC: Likely', 'WPRDC: Active'];
 var OPPORTUNITY_LAYERS = ['Opportunity Score'];
 
 function initControl() {
-  // Find the leaflet map instance
+  // Find the Leaflet map
   _map = Object.values(window).find(function(v) {
     return v && v._leaflet_id && typeof v.eachLayer === 'function' && v._container;
   });
   if (!_map) { setTimeout(initControl, 200); return; }
 
-  // Catalog all layers
-  _map.eachLayer(function(layer) {
-    var name = layer.options && layer.options.name;
-    if (!name) return;
-    if (layer._url || layer._tiles) {          // tile layer
-      _tileLayers[name] = layer;
-    } else {
-      _layers[name] = layer;
+  // Folium declares each layer as a top-level var: feature_group_XXXX, heat_map_XXXX, etc.
+  // Scan window for all of them and index by their options.name.
+  Object.keys(window).forEach(function(key) {
+    var isLayer = key.indexOf('feature_group_') === 0 ||
+                  key.indexOf('heat_map_') === 0;
+    if (!isLayer) return;
+    var layer = window[key];
+    if (layer && layer.options && layer.options.name) {
+      _layers[layer.options.name] = layer;
     }
   });
 
-  // Start in vacancy view (already the default from Python show= flags)
+  // Find tile layers via the layer_control_*_layers registry (base_layers only)
+  var lcLayers = Object.values(window).find(function(v) {
+    return v && typeof v === 'object' && v.base_layers &&
+           Object.keys(v.base_layers).length > 0;
+  });
+  if (lcLayers) _tileLayers = lcLayers.base_layers;
+
+  if (Object.keys(_layers).length === 0) { setTimeout(initControl, 300); return; }
+
   setView('vacancy');
 }
 
@@ -607,32 +619,25 @@ function setView(mode) {
   var oppLayers = layersByPattern(OPPORTUNITY_LAYERS);
 
   if (mode === 'vacancy') {
-    // Show vacancy layers (all three)
     vacLayers.forEach(function(l) { _map.addLayer(l); });
-    // Hide all opportunity layers
     oppLayers.forEach(function(l) { _map.removeLayer(l); });
-    // UI
     styleBtn('btn-vacancy', true);
     styleBtn('btn-opportunity', false);
     document.getElementById('vacancy-legend').style.display = '';
     document.getElementById('opportunity-legend').style.display = 'none';
   } else {
-    // Hide all vacancy layers
     vacLayers.forEach(function(l) { _map.removeLayer(l); });
-    // Show only tiers whose checkboxes are checked
+    var highChk = document.getElementById('chk-high').checked;
+    var medChk  = document.getElementById('chk-medium').checked;
     oppLayers.forEach(function(l) {
-      var name = l.options.name;
-      var isHigh   = name.indexOf('High')   !== -1;
-      var isMedium = name.indexOf('Medium') !== -1;
-      var highChk   = document.getElementById('chk-high').checked;
-      var medChk    = document.getElementById('chk-medium').checked;
+      var isHigh   = Object.keys(_layers).find(function(n) { return _layers[n] === l && n.indexOf('High')   !== -1; });
+      var isMedium = Object.keys(_layers).find(function(n) { return _layers[n] === l && n.indexOf('Medium') !== -1; });
       if ((isHigh && highChk) || (isMedium && medChk)) {
         _map.addLayer(l);
       } else {
         _map.removeLayer(l);
       }
     });
-    // UI
     styleBtn('btn-vacancy', false);
     styleBtn('btn-opportunity', true);
     document.getElementById('vacancy-legend').style.display = 'none';
@@ -642,38 +647,33 @@ function setView(mode) {
 
 function toggleOpportunityTier(tier, show) {
   if (_currentView !== 'opportunity') return;
-  layersByPattern(['Opportunity Score']).forEach(function(l) {
-    if (l.options.name.indexOf(tier) !== -1) {
-      if (show) _map.addLayer(l); else _map.removeLayer(l);
+  Object.keys(_layers).forEach(function(name) {
+    if (name.indexOf('Opportunity Score') !== -1 && name.indexOf(tier) !== -1) {
+      if (show) _map.addLayer(_layers[name]);
+      else      _map.removeLayer(_layers[name]);
     }
   });
 }
 
 function toggleNamedLayer(pattern, show) {
-  layersByPattern([pattern]).forEach(function(l) {
-    if (show) _map.addLayer(l); else _map.removeLayer(l);
+  Object.keys(_layers).forEach(function(name) {
+    if (name.indexOf(pattern) !== -1) {
+      if (show) _map.addLayer(_layers[name]);
+      else      _map.removeLayer(_layers[name]);
+    }
   });
 }
 
 function switchBasemap(targetName) {
-  // Remove all tile layers, add the selected one
-  Object.keys(_tileLayers).forEach(function(name) {
-    _map.removeLayer(_tileLayers[name]);
-  });
+  Object.keys(_tileLayers).forEach(function(name) { _map.removeLayer(_tileLayers[name]); });
   if (_tileLayers[targetName]) _map.addLayer(_tileLayers[targetName]);
 }
 
 function styleBtn(id, active) {
   var btn = document.getElementById(id);
-  if (active) {
-    btn.style.background = '#37474f';
-    btn.style.color = 'white';
-    btn.style.borderColor = '#37474f';
-  } else {
-    btn.style.background = 'white';
-    btn.style.color = '#555';
-    btn.style.borderColor = '#bbb';
-  }
+  btn.style.background   = active ? '#37474f' : 'white';
+  btn.style.color        = active ? 'white'   : '#555';
+  btn.style.borderColor  = active ? '#37474f' : '#bbb';
 }
 
 function togglePanel() {
@@ -684,7 +684,7 @@ function togglePanel() {
   btn.textContent    = open ? '+' : '−';
 }
 
-window.addEventListener('load', function() { setTimeout(initControl, 600); });
+window.addEventListener('load', function() { setTimeout(initControl, 800); });
 </script>
 """
 
@@ -736,7 +736,9 @@ def main():
     # 6. Community labels
     add_community_labels(m)
 
-    # UI controls — no LayerControl; replaced by custom CONTROL_HTML panel
+    # LayerControl is hidden via CSS but kept so its _layers registry is
+    # available in JS — our custom panel uses it to find layers by name.
+    folium.LayerControl(collapsed=True, position="topright").add_to(m)
     Fullscreen(position="topright").add_to(m)
     MiniMap(toggle_display=True, position="bottomright").add_to(m)
 
