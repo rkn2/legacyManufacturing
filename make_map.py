@@ -319,8 +319,6 @@ def add_opportunity_layer(m: folium.Map, gdf: gpd.GeoDataFrame):
         layer.add_to(m)
         log.info("  Opportunity %s: %d sites", tier_label, len(sub))
 
-    SCORE_COLORMAP.add_to(m)
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Layer 4: EPA CIMC sites — colored by remediation status
@@ -463,49 +461,231 @@ TITLE_HTML = """
      box-shadow:2px 2px 6px rgba(0,0,0,0.25);text-align:center;pointer-events:none;">
   AI-Enabled Revitalization: Legacy Industrial Infrastructure<br>
   <span style="font-size:11px;font-weight:normal;color:#555;">
-    Southwestern Pennsylvania / Mon Valley &nbsp;·&nbsp;
-    Bubble size = lot area &nbsp;·&nbsp; Toggle layers in top-right panel
+    Southwestern Pennsylvania / Mon Valley &nbsp;·&nbsp; Bubble size = lot area
   </span>
 </div>
 """
 
-LEGEND_HTML = """
-<div style="position:fixed;bottom:40px;left:40px;z-index:1000;
-     background:white;border:2px solid #555;border-radius:6px;
-     padding:12px 16px;font-size:12px;line-height:2;
-     box-shadow:2px 2px 8px rgba(0,0,0,0.3);max-width:290px;">
-  <b style="font-size:13px;">SW PA Legacy Industrial Sites</b>
+CONTROL_HTML = """
+<div id="ctrl-panel" style="
+    position:fixed; top:70px; right:10px; z-index:1000;
+    background:white; border:2px solid #555; border-radius:8px;
+    box-shadow:2px 2px 10px rgba(0,0,0,0.3);
+    font-size:12px; width:240px;">
 
-  <div style="margin-top:6px;"><b>Vacancy View</b></div>
-  <span style="color:#c62828;font-size:18px;">●</span> Vacant Industrial<br>
-  <span style="color:#bf360c;font-size:18px;">●</span> Likely Underutilized<br>
-  <span style="color:#1b5e20;font-size:18px;">●</span> Active Industrial<br>
+  <!-- Header -->
+  <div style="display:flex;justify-content:space-between;align-items:center;
+              padding:8px 12px;background:#37474f;border-radius:6px 6px 0 0;cursor:pointer;"
+       onclick="togglePanel()">
+    <b style="color:white;font-size:13px;">SW PA Industrial Sites</b>
+    <span id="ctrl-toggle-btn" style="color:white;font-size:18px;line-height:1;">−</span>
+  </div>
 
-  <div style="margin-top:6px;"><b>Opportunity Score View</b> <i style="font-weight:normal;">(toggle in panel)</i></div>
-  <span style="background:linear-gradient(to right,#1a9641,#ffffbf,#d7191c);
-               display:inline-block;width:120px;height:10px;vertical-align:middle;
-               border-radius:3px;"></span>
-  <span style="font-size:10px;"> 0 → 100</span><br>
-  <i style="font-size:10px;color:#555;">Scores vacancy · size · dereliction · cost · age</i>
+  <!-- Body -->
+  <div id="ctrl-body" style="padding:10px 12px;">
 
-  <hr style="margin:8px 0;">
-  <i style="font-size:10px;color:#777;">Bubble size = lot area &nbsp;·&nbsp; Source: WPRDC</i>
+    <!-- View toggle -->
+    <div style="margin-bottom:10px;">
+      <div style="font-size:10px;color:#777;margin-bottom:5px;text-transform:uppercase;letter-spacing:.5px;">View</div>
+      <div style="display:flex;gap:4px;">
+        <button id="btn-vacancy" onclick="setView('vacancy')" style="
+            flex:1;padding:5px 0;font-size:11px;cursor:pointer;border-radius:4px;
+            border:2px solid #37474f;background:#37474f;color:white;font-weight:bold;">
+          Vacancy Status
+        </button>
+        <button id="btn-opportunity" onclick="setView('opportunity')" style="
+            flex:1;padding:5px 0;font-size:11px;cursor:pointer;border-radius:4px;
+            border:2px solid #bbb;background:white;color:#555;">
+          Opportunity Score
+        </button>
+      </div>
+    </div>
+
+    <!-- Vacancy legend (shown in vacancy mode) -->
+    <div id="vacancy-legend" style="margin-bottom:10px;line-height:1.9;">
+      <span style="color:#c62828;font-size:16px;">●</span> Vacant Industrial<br>
+      <span style="color:#bf360c;font-size:16px;">●</span> Likely Underutilized<br>
+      <span style="color:#1b5e20;font-size:16px;">●</span> Active Industrial
+    </div>
+
+    <!-- Opportunity legend (hidden in vacancy mode) -->
+    <div id="opportunity-legend" style="display:none;margin-bottom:10px;">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+        <div style="background:linear-gradient(to right,#1a9641,#ffffbf,#d7191c);
+                    width:100px;height:10px;border-radius:3px;flex-shrink:0;"></div>
+        <span style="font-size:10px;color:#555;">0 → 100</span>
+      </div>
+      <div style="font-size:10px;color:#777;line-height:1.5;">
+        Scores: vacancy · lot size · dereliction · cost · building age
+      </div>
+      <div style="margin-top:6px;">
+        <label style="display:block;cursor:pointer;">
+          <input type="checkbox" id="chk-high" onchange="toggleOpportunityTier('High', this.checked)" checked>
+          High priority (&ge;70)
+        </label>
+        <label style="display:block;cursor:pointer;">
+          <input type="checkbox" id="chk-medium" onchange="toggleOpportunityTier('Medium', this.checked)">
+          Medium priority (45–70)
+        </label>
+      </div>
+    </div>
+
+    <hr style="margin:6px 0;border:none;border-top:1px solid #eee;">
+
+    <!-- Extra layers -->
+    <div style="font-size:10px;color:#777;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px;">Extra Layers</div>
+    <label style="display:block;cursor:pointer;margin-bottom:3px;">
+      <input type="checkbox" id="chk-heatmap" onchange="toggleNamedLayer('Density Heatmap', this.checked)" checked>
+      Density Heatmap
+    </label>
+    <label style="display:block;cursor:pointer;margin-bottom:3px;">
+      <input type="checkbox" id="chk-communities" onchange="toggleNamedLayer('Mon Valley Communities', this.checked)" checked>
+      Community Labels
+    </label>
+    <label style="display:block;cursor:pointer;margin-bottom:3px;">
+      <input type="checkbox" id="chk-mines" onchange="toggleNamedLayer('Abandoned Mines', this.checked)">
+      Abandoned Mines (context)
+    </label>
+
+    <hr style="margin:6px 0;border:none;border-top:1px solid #eee;">
+
+    <!-- Basemap -->
+    <div style="font-size:10px;color:#777;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px;">Basemap</div>
+    <select id="basemap-select" onchange="switchBasemap(this.value)" style="width:100%;font-size:11px;padding:3px;">
+      <option value="Satellite (Esri)">Satellite</option>
+      <option value="Light (CartoDB)">Light</option>
+      <option value="OpenStreetMap">OpenStreetMap</option>
+    </select>
+
+    <div style="margin-top:8px;font-size:10px;color:#aaa;text-align:center;">
+      Bubble size = lot area &nbsp;·&nbsp; Source: WPRDC
+    </div>
+  </div>
 </div>
-"""
 
-NOTE_HTML = """
-<div style="position:fixed;bottom:40px;right:10px;z-index:1000;
-     background:#fff8e1;border:2px solid #f9a825;border-radius:6px;
-     padding:10px 14px;font-size:11px;line-height:1.6;
-     box-shadow:2px 2px 6px rgba(0,0,0,0.2);max-width:260px;">
-  <b>On data scope:</b><br>
-  Focus pilot site selection on
-  <b style="color:#c62828;">Vacant</b> and
-  <b style="color:#e65100;">Underutilized</b> industrial parcels —
-  these are existing buildings that can be retrofitted.<br><br>
-  Brownfields under active cleanup and abandoned mines are
-  <b>not</b> viable near-term targets.
-</div>
+<script>
+var _map = null;
+var _layers = {};       // name fragment → leaflet layer
+var _tileLayers = {};   // tile name → leaflet layer
+var _currentView = 'vacancy';
+
+// Layer name patterns
+var VACANCY_LAYERS     = ['WPRDC: Vacant', 'WPRDC: Likely', 'WPRDC: Active'];
+var OPPORTUNITY_LAYERS = ['Opportunity Score'];
+
+function initControl() {
+  // Find the leaflet map instance
+  _map = Object.values(window).find(function(v) {
+    return v && v._leaflet_id && typeof v.eachLayer === 'function' && v._container;
+  });
+  if (!_map) { setTimeout(initControl, 200); return; }
+
+  // Catalog all layers
+  _map.eachLayer(function(layer) {
+    var name = layer.options && layer.options.name;
+    if (!name) return;
+    if (layer._url || layer._tiles) {          // tile layer
+      _tileLayers[name] = layer;
+    } else {
+      _layers[name] = layer;
+    }
+  });
+
+  // Start in vacancy view (already the default from Python show= flags)
+  setView('vacancy');
+}
+
+function layersByPattern(patterns) {
+  return Object.keys(_layers).filter(function(name) {
+    return patterns.some(function(p) { return name.indexOf(p) !== -1; });
+  }).map(function(name) { return _layers[name]; });
+}
+
+function setView(mode) {
+  _currentView = mode;
+  var vacLayers = layersByPattern(VACANCY_LAYERS);
+  var oppLayers = layersByPattern(OPPORTUNITY_LAYERS);
+
+  if (mode === 'vacancy') {
+    // Show vacancy layers (all three)
+    vacLayers.forEach(function(l) { _map.addLayer(l); });
+    // Hide all opportunity layers
+    oppLayers.forEach(function(l) { _map.removeLayer(l); });
+    // UI
+    styleBtn('btn-vacancy', true);
+    styleBtn('btn-opportunity', false);
+    document.getElementById('vacancy-legend').style.display = '';
+    document.getElementById('opportunity-legend').style.display = 'none';
+  } else {
+    // Hide all vacancy layers
+    vacLayers.forEach(function(l) { _map.removeLayer(l); });
+    // Show only tiers whose checkboxes are checked
+    oppLayers.forEach(function(l) {
+      var name = l.options.name;
+      var isHigh   = name.indexOf('High')   !== -1;
+      var isMedium = name.indexOf('Medium') !== -1;
+      var highChk   = document.getElementById('chk-high').checked;
+      var medChk    = document.getElementById('chk-medium').checked;
+      if ((isHigh && highChk) || (isMedium && medChk)) {
+        _map.addLayer(l);
+      } else {
+        _map.removeLayer(l);
+      }
+    });
+    // UI
+    styleBtn('btn-vacancy', false);
+    styleBtn('btn-opportunity', true);
+    document.getElementById('vacancy-legend').style.display = 'none';
+    document.getElementById('opportunity-legend').style.display = '';
+  }
+}
+
+function toggleOpportunityTier(tier, show) {
+  if (_currentView !== 'opportunity') return;
+  layersByPattern(['Opportunity Score']).forEach(function(l) {
+    if (l.options.name.indexOf(tier) !== -1) {
+      if (show) _map.addLayer(l); else _map.removeLayer(l);
+    }
+  });
+}
+
+function toggleNamedLayer(pattern, show) {
+  layersByPattern([pattern]).forEach(function(l) {
+    if (show) _map.addLayer(l); else _map.removeLayer(l);
+  });
+}
+
+function switchBasemap(targetName) {
+  // Remove all tile layers, add the selected one
+  Object.keys(_tileLayers).forEach(function(name) {
+    _map.removeLayer(_tileLayers[name]);
+  });
+  if (_tileLayers[targetName]) _map.addLayer(_tileLayers[targetName]);
+}
+
+function styleBtn(id, active) {
+  var btn = document.getElementById(id);
+  if (active) {
+    btn.style.background = '#37474f';
+    btn.style.color = 'white';
+    btn.style.borderColor = '#37474f';
+  } else {
+    btn.style.background = 'white';
+    btn.style.color = '#555';
+    btn.style.borderColor = '#bbb';
+  }
+}
+
+function togglePanel() {
+  var body = document.getElementById('ctrl-body');
+  var btn  = document.getElementById('ctrl-toggle-btn');
+  var open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  btn.textContent    = open ? '+' : '−';
+}
+
+window.addEventListener('load', function() { setTimeout(initControl, 600); });
+</script>
 """
 
 
@@ -556,13 +736,12 @@ def main():
     # 6. Community labels
     add_community_labels(m)
 
-    # UI controls
+    # UI controls — no LayerControl; replaced by custom CONTROL_HTML panel
     Fullscreen(position="topright").add_to(m)
     MiniMap(toggle_display=True, position="bottomright").add_to(m)
-    folium.LayerControl(collapsed=False, position="topright").add_to(m)
 
     # HTML overlays
-    for html in (TITLE_HTML, LEGEND_HTML, NOTE_HTML):
+    for html in (TITLE_HTML, CONTROL_HTML):
         m.get_root().html.add_child(folium.Element(html))
 
     m.save(str(OUTPUT_FILE))
